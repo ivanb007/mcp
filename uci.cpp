@@ -3,6 +3,7 @@
 #include "engine.h"
 #include "threadpool.h"
 #include "openingbook.h"
+#include "fen.h"
 #include "search.h"
 #include <iostream>
 #include <sstream>
@@ -17,6 +18,7 @@ OpeningBook openingBook;
 
 void runUciLoop() {
     BoardData state = getInitialBoard();
+    std::string fen;
     std::string line;
     openingBook.load("book.bin"); // Load once
 
@@ -49,8 +51,9 @@ void runUciLoop() {
             }
 
             // Check opening book
-            if (openingBook.hasMove(state)) {
-                Move bookMove = openingBook.getMove(state);
+            fen = boardToFEN(state);
+            if (openingBook.hasMove(fen)) {
+                Move bookMove = openingBook.getMove(fen);
                 std::cout << "bestmove " << moveToUci(bookMove) << "\n";
                 std::cout.flush();
                 continue;

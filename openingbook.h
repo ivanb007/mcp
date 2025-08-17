@@ -1,5 +1,6 @@
 
 #pragma once
+
 #include "engine.h"
 #include <string>
 #include <unordered_map>
@@ -16,10 +17,14 @@ struct PolyglotEntry {
 class OpeningBook {
 public:
     bool load(const std::string& filename);
-    bool hasMove(const BoardData& board) const;
-    Move getMove(const BoardData& board) const;
+    bool hasMove(const std::string& fen) const;
+    Move getMove(const std::string& fen) const;
 
 private:
     std::vector<PolyglotEntry> entries;
     std::unordered_map<uint64_t, std::vector<PolyglotEntry>> entryMap;
 };
+
+int pieceIndex(char piece);
+int squareIndex(int row, int col);
+uint64_t computePolyglotKeyFromFEN(const std::string& fen);

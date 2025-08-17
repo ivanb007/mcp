@@ -1,33 +1,139 @@
+// openingbook.cpp
 
 #include "openingbook.h"
-#include "engine.h"
+
 #include <fstream>
 #include <random>
 #include <algorithm>
+#include <sstream>
 #include <cstring>
+#include <map>
+#include <vector>
 
-namespace {
-    uint64_t flip_bytes(uint64_t x) {
-        uint64_t y = 0;
-        for (int i = 0; i < 8; ++i)
-            y = (y << 8) | ((x >> (i * 8)) & 0xFF);
-        return y;
+// Polyglot hash random values (defined in external table)
+extern uint64_t polyglotRandom[781]; // should be initialized with standard Polyglot values
+
+int pieceIndex(char piece) {
+    switch (piece) {
+        case 'p': return 0;   // black pawn
+        case 'P': return 1;   // white pawn
+        case 'n': return 2;   // black knight
+        case 'N': return 3;   // white knight
+        case 'b': return 4;   // black bishop
+        case 'B': return 5;   // white bishop
+        case 'r': return 6;   // black rook
+        case 'R': return 7;   // white rook
+        case 'q': return 8;   // black queen
+        case 'Q': return 9;   // white queen
+        case 'k': return 10;  // black king
+        case 'K': return 11;  // white king
+        default:  return -1;  // not a valid piece
+    }
+}
+
+int squareIndex(int row, int col) {
+    // Convert row and column to reflect Polyglot's square indexing which is:
+    // a1 = 0 (i.e. row=0 & col=0) up to h8 = 63 (i.e. row=7 & col=7)
+    // This means rank 1 is row 0, and rank 8 is row 7 in the array.
+    return row * 8 + col;
+}
+
+uint64_t computePolyglotKeyFromFEN(const std::string& fen) {
+    std::istringstream iss(fen);
+    std::string piecePlacement, activeColor, castling, ep;
+    iss >> piecePlacement >> activeColor >> castling >> ep;
+
+    uint64_t key = 0;
+
+    // Process piece placement
+    int row = 7, col = 0;
+    for (char c : piecePlacement) {
+        // If we hit a delimiter, move to the start of the next row
+        if (c == '/') { row--; col = 0; continue; }
+        // If we hit a digit, it means we need to skip that many squares
+        if (isdigit(c)) {
+            col += c - '0';
+        } else {
+            // Otherwise, we have a piece character
+            int index = pieceIndex(c);
+            int sq = squareIndex(row, col);
+            if (index >= 0)
+                key ^= polyglotRandom[64 * index + sq];
+            // Increment column for the next piece
+            col++;
+        }
     }
 
-    uint16_t flip_bytes16(uint16_t x) {
-        return (x << 8) | (x >> 8);
+    // Process castling rights
+    if (castling.find('K') != std::string::npos)
+        key ^= polyglotRandom[768 + 0];  // white short
+
+    if (castling.find('Q') != std::string::npos)
+        key ^= polyglotRandom[768 + 1];  // white long
+
+    if (castling.find('k') != std::string::npos)
+        key ^= polyglotRandom[768 + 2];  // black short
+
+    if (castling.find('q') != std::string::npos)
+        key ^= polyglotRandom[768 + 3];  // black long
+    
+    // Process en passant target square
+    if (ep != "-") {
+        char file = ep[0];
+        int epFile = file - 'a';
+        // We only include en passant file hash if a pawn is in position to capture
+        std::string rankLine;
+        // Determine the rank of the en passant target
+        int epRank = (activeColor == "w") ? 4 : 3;
+        std::istringstream pieceStream(fen);
+        pieceStream >> piecePlacement;
+        int curRow = 7, curCol = 0;
+        for (char c : piecePlacement) {
+            // If we hit a delimiter, move to the start of the next row
+            if (c == '/') { curRow--; curCol = 0; continue; }
+            // If we hit a digit, it means we need to skip that many squares
+            if (isdigit(c)) {
+                curCol += c - '0';
+            } else {
+                // Check if this piece is a pawn that can capture en passant
+                if (curRow == epRank &&
+                    ((activeColor == "w" && c == 'P') || (activeColor == "b" && c == 'p')) &&
+                    (curCol == epFile - 1 || curCol == epFile + 1)) {
+                    key ^= polyglotRandom[772 + epFile];
+                    break;
+                }
+                curCol++;
+            }
+        }
     }
 
-    uint32_t flip_bytes32(uint32_t x) {
-        return ((x & 0xFF) << 24) | ((x & 0xFF00) << 8) |
-               ((x & 0xFF0000) >> 8) | ((x & 0xFF000000) >> 24);
-    }
+    // Process active color only if it is white to move
+    if (activeColor == "w")
+        key ^= polyglotRandom[780];
 
-    Move decode_polyglot_move(uint16_t m) {
-        int from = ((m >> 6) & 0x3F);
-        int to = (m & 0x3F);
-        return { from / 8, from % 8, to / 8, to % 8 };
-    }
+    return key;
+}
+
+Move decode_polyglot_move(uint16_t m) {
+    int from = ((m >> 6) & 0x3F);
+    int to = (m & 0x3F);
+    return { from / 8, from % 8, to / 8, to % 8, false, false, '\0' };
+}
+
+uint64_t flip_bytes(uint64_t x) {
+    uint64_t y = 0;
+    for (int i = 0; i < 8; ++i)
+        y = (y << 8) | ((x >> (i * 8)) & 0xFF);
+    return y;
+}
+
+uint16_t flip_bytes16(uint16_t x) {
+    return (x << 8) | (x >> 8);
+}
+
+uint32_t flip_bytes32(uint32_t x) {
+    return ((x & 0xFF) << 24) | ((x & 0xFF00) << 8) |
+           ((x & 0xFF0000) >> 8) | ((x & 0xFF000000) >> 24);
 }
 
 bool OpeningBook::load(const std::string& filename) {
@@ -47,17 +153,15 @@ bool OpeningBook::load(const std::string& filename) {
     return true;
 }
 
-bool OpeningBook::hasMove(const BoardData& board) const {
-    Zobrist zobrist;
-    uint64_t key = zobrist.computeHash(board);
+bool OpeningBook::hasMove(const std::string& fen) const {
+    uint64_t key = computePolyglotKeyFromFEN(fen);
     return entryMap.find(key) != entryMap.end();
 }
 
-Move OpeningBook::getMove(const BoardData& board) const {
-    Zobrist zobrist;
-    uint64_t key = zobrist.computeHash(board);
+Move OpeningBook::getMove(const std::string& fen) const {
+    uint64_t key = computePolyglotKeyFromFEN(fen);
     auto it = entryMap.find(key);
-    if (it == entryMap.end()) return {0,0,0,0};
+    if (it == entryMap.end()) return {0,0,0,0, false, false, '\0'}; // No move found
 
     std::random_device rd;
     std::mt19937 gen(rd());
