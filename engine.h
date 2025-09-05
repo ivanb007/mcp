@@ -9,13 +9,12 @@
 // Constants used to indicate the colour of a piece at square sq
 // 1 for white, -1 for black, 0 for empty
 #define WHITE			1
-#define EMPTY			0
-#define BLACK			-1
+#define BLACK			0
+#define EMPTY			-1
 
 // Constants used to indicate square is occupied by one of the 7 piece types:
 // 0 for empty, 1 for pawn, 2 for knight, 3 for bishop, 4 for rook, 5 for queen, 6 for king
-// and -1 for invalid square
-#define EMPTY		    0
+#define NO_PIECE		0
 #define PAWN		    1
 #define KNIGHT	        2
 #define BISHOP	        3
@@ -58,6 +57,26 @@ constexpr char TYPEtoCHAR(int p) {
 #define G8				6
 #define H8				7
 #define SQUARE_NB       64 // Total number of squares on the board
+
+// Constants for Files
+#define FILE_A      1
+#define FILE_B      2
+#define FILE_C      3
+#define FILE_D      4
+#define FILE_E      5
+#define FILE_F      6
+#define FILE_G      7
+#define FILE_H      8
+
+// Constants for Ranks
+#define RANK_1      1
+#define RANK_2      2
+#define RANK_3      3
+#define RANK_4      4
+#define RANK_5      5
+#define RANK_6      6
+#define RANK_7      7
+#define RANK_8      8
 
 // Returns the row index of the square sq
 // Rows are numbered from 0 (top) to 7 (bottom).
@@ -131,6 +150,21 @@ struct Move {
     bool isCastling = false;
     char promotion = '\0';  // Set to 'q', 'r', 'b', 'n' for promotions.
     int score = 0; // The score of the move, used for sorting moves.
+
+    // Constructor to initialize all fields
+    Move() : fromRow(0), fromCol(0), toRow(0), toCol(0), isEnPassant(false), isCastling(false), promotion('\0'), score(0) {}
+
+    Move(int fr, int fc, int tr, int tc, bool ep = false, bool castling = false, char promo = '\0', int sc = 0)
+        : fromRow(fr), fromCol(fc), toRow(tr), toCol(tc), isEnPassant(ep), isCastling(castling), promotion(promo), score(sc) {}
+    
+    // Define the operator == for the structure Move
+    bool operator==(const Move& other) const {
+        // Compare members of Move for equality
+        // Example: return this->field == other.field;
+        if ( (this->fromRow == other.fromRow) && (this->fromCol == other.fromCol) 
+              && (this->toRow == other.toRow) && (this->toCol == other.toCol) ) return true;
+        return false;
+    }
 };
 
 // We use an 8x8 square-centric board representation comprising a 64 element char array:
@@ -161,7 +195,7 @@ struct Move {
 //
 struct BoardData {
     char pieces[64];           // Flat 8x8 board: row * 8 + col
-    bool whiteToMove;          // Whose turn is it
+    bool whiteToMove = true;   // Whose turn is it
 
     // Castling rights: white king/queen side, black king/queen side
     bool canCastleK = true;
@@ -180,17 +214,15 @@ struct BoardData {
     }   
 
     // Returns the color of the piece at square sq
-    // 1 for white, -1 for black, 0 for empty
     int PieceColor(int sq) const {
         if (sq < 0 || sq >= 64)
             return SQUARE_NB; // Invalid square
         char p = pieces[sq];
-        if (p == '.') return 0;
-        return isupper(p) ? 1 : -1;
+        if (p == '.') return EMPTY;
+        return isupper(p) ? WHITE : BLACK;
     }
 
     // Returns the piece type at square sq
-    // 0 for empty, 1 for pawn, 2 for knight, 3 for bishop, 4 for rook, 5 for queen, 6 for king and -1 for invalid
     int PieceType(int sq) const {
         if (sq < 0 || sq >= 64)
             return SQUARE_NB; // Invalid square
@@ -227,6 +259,7 @@ BoardData getInitialBoard();
 void parsePosition(const std::string& input, BoardData& board);
 BoardData applyMove(BoardData board, Move m);
 std::string moveToUci(const Move& m);
+Move bookMoveToFullMove(const Move& m, BoardData board);
 
 // Zobrist hashing support
 struct Zobrist {

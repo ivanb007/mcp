@@ -8,10 +8,14 @@
 
 void testPolyglotKeyCalculation() {
     OpeningBook book;
-    book.load("/home/ivan/github/mcp/default_book.bin"); // assume this file is present and valid
+    book.load("/home/ivan/github/mcp/book.bin"); // assume this file is present and valid
 
     // Famous opening position: King's Pawn Opening
     std::string fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
+
+    // Starting position
+    // std::string fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
     bool has = book.hasMove(fen);
     std::cout << "Book has move for King's Pawn: " << std::boolalpha << has << std::endl;
     assert(has && "Book should have a move for this FEN if opening book includes it");

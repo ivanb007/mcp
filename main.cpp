@@ -3,6 +3,6 @@
 #include "uci.h"
 
 int main() {
-    runUciLoop();
+    runUciLoop_Deterministic();
     return 0;
 }

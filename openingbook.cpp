@@ -1,6 +1,7 @@
 // openingbook.cpp
 
 #include "openingbook.h"
+#include "search.h"
 
 #include <fstream>
 #include <random>
@@ -115,9 +116,46 @@ uint64_t computePolyglotKeyFromFEN(const std::string& fen) {
 }
 
 Move decode_polyglot_move(uint16_t m) {
-    int from = ((m >> 6) & 0x3F);
-    int to = (m & 0x3F);
-    return { from / 8, from % 8, to / 8, to % 8, false, false, '\0' };
+    //
+    // The "polyglot move" is a bit field with the following meaning (bit 0 is the least significant bit)
+    // bits                meaning
+    // ===================================
+    // 0,1,2               to file
+    // 3,4,5               to row
+    // 6,7,8               from file
+    // 9,10,11             from row
+    // 12,13,14            promotion piece
+    int from = mirror[((m >> 6) & 0x3F)];
+    int to = mirror[(m & 0x3F)];
+    // Convert row and column to reflect Polyglot's square indexing which is:
+    // a1 = 0 (i.e. row=0 & col=0) up to h8 = 63 (i.e. row=7 & col=7)
+    // This means rank 1 is row 0, and rank 8 is row 7 in the array.
+
+    // "promotion piece" is encoded as follows
+    // none       0
+    // knight     1
+    // bishop     2
+    // rook       3
+    // queen      4
+    int promo_piece = (m >> 12) & 0x3F;
+    char promotion = '\0';
+    switch (promo_piece) {
+        case 1: promotion = 'n'; break;
+        case 2: promotion = 'b'; break;
+        case 3: promotion = 'r'; break;
+        case 4: promotion = 'q'; break;
+    }
+
+    // Castling moves are represented somewhat unconventially as follows:
+    // white short      e1h1
+    // white long       e1a1
+    // black short      e8h8
+    // black long       e8a8
+    // It is technically possible that these moves are legal non-castling moves.
+    // So before deciding that these are really castling moves the engine must for example verify there is a king present on e1/e8.
+    // This is done by the follow up function bookMoveToFullMove in engine.cpp.
+
+    return { from / 8, from % 8, to / 8, to % 8, false, false, promotion };
 }
 
 uint64_t flip_bytes(uint64_t x) {

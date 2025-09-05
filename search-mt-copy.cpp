@@ -63,7 +63,6 @@ bool isSameMove(const Move& a, const Move& b) {
 //     });
 // }
 
-// ----------------------- Static evaluator (White positive) -------------------
 int evaluate(const BoardData& state) {
     if (state.halfmoveClock >= 100)
         return 0; // Draw evaluation due to 50-move rule
@@ -152,7 +151,7 @@ int evaluate(const BoardData& state) {
                 break;
         } 
     }
-    // Return the score relative to White positive
+    // Return the score relative to White
     return score[WHITE] - score[BLACK];
 }
 
@@ -1031,7 +1030,7 @@ std::vector<Move> sortMoves(std::vector<Move>& moves, const BoardData& board) {
     return moves;
 }
 
-int old_quiescence(BoardData board, int alpha, int beta, bool maximizing,
+int quiescence(BoardData board, int alpha, int beta, bool maximizing,
                std::chrono::steady_clock::time_point deadline, std::atomic<bool>& stop) {
     // Quiescence search is a search that continues until a stable position is reached.
     g_nodes.fetch_add(1, std::memory_order_relaxed);          // <-- count this node
@@ -1050,7 +1049,7 @@ int old_quiescence(BoardData board, int alpha, int beta, bool maximizing,
     if (moves.empty()) return stand_pat; // If no moves, return the static evaluation
     for (const auto& m : moves) {
         BoardData newBoard = applyMove(board, m);
-        int score = old_quiescence(newBoard, alpha, beta, !maximizing, deadline, stop);
+        int score = quiescence(newBoard, alpha, beta, !maximizing, deadline, stop);
         if (maximizing) {
             if (score >= beta) return beta;
             if (score > alpha) alpha = score;
@@ -1062,182 +1061,7 @@ int old_quiescence(BoardData board, int alpha, int beta, bool maximizing,
     return maximizing ? alpha : beta;
 }
 
-// ----------------------- Helpers --------------------------------------------
-static inline int stmSign(const BoardData& b) { return b.whiteToMove ? +1 : -1; }
-
-static inline bool isCaptureMove(const BoardData& b, const Move& m) {
-    // Basic capture detection: piece present on destination before the move
-    // (En passant not covered unless your Move carries that flag; extend if needed.)
-    int to = m.toRow * 8 + m.toCol;
-    char dst = b.pieces[to];
-    if (dst != '.') return true;
-
-    // If you have flags on Move, uncomment/extend:
-    // if (m.isEnPassant) return true;
-
-    return false;
-}
-
-// ----------------------- Quiescence (negamax, captures only) -----------------
-int quiescenceTimed(BoardData& board, int alpha, int beta, int qdepth,
-                    std::chrono::steady_clock::time_point deadline,
-                    std::atomic<bool>& stop, std::vector<Move>& pv)
-{
-    if (stop.load() || std::chrono::steady_clock::now() > deadline) {
-        pv.clear();
-        return 0;
-    }
-    g_nodes.fetch_add(1, std::memory_order_relaxed);
-
-    // Stand-pat (static) eval from STM perspective
-    int standPat = stmSign(board) * evaluate(board);
-
-    // Fail-high
-    if (standPat >= beta) {
-        pv.clear();
-        return standPat;
-    }
-
-    // Raise alpha
-    if (standPat > alpha) alpha = standPat;
-
-    // Depth safety for pathological capture trees
-    if (qdepth <= 0) {
-        pv.clear();
-        return standPat;
-    }
-
-    // Generate *captures only*
-    std::vector<Move> moves = generateMoves(board);
-    // Filter to captures; if you already have generateCaptures(), use that instead.
-    std::vector<Move> caps;
-    caps.reserve(moves.size());
-    for (const auto& m : moves) {
-        if (isCaptureMove(board, m)) caps.push_back(m);
-    }
-
-    if (caps.empty()) {
-        pv.clear();
-        return standPat;
-    }
-
-    int bestScore = standPat; // not strictly required, but useful for PV logic
-    Move bestMove{};
-    std::vector<Move> bestLine;
-
-    // (Optional) order captures (MVV-LVA etc.) for better pruning
-    // std::sort(caps.begin(), caps.end(), [&](const Move& a, const Move& b) { ... });
-
-    for (const auto& m : caps) {
-        if (stop.load() || std::chrono::steady_clock::now() > deadline) break;
-
-        BoardData child = applyMove(board, m);
-        std::vector<Move> childPV;
-
-        // Negamax recurse on captures only: flip window, negate result
-        int score = -quiescenceTimed(child, -beta, -alpha, qdepth - 1, deadline, stop, childPV);
-
-        if (score > bestScore) {
-            bestScore = score;
-            bestMove  = m;
-            bestLine  = std::move(childPV);
-        }
-
-        if (bestScore > alpha) alpha = bestScore;
-        if (alpha >= beta) {
-            break; // cutoff
-        }
-    }
-
-    // Build PV for quiescence (optional but handy for debugging)
-    pv.clear();
-    if (!(bestMove.fromRow==0 && bestMove.fromCol==0 && bestMove.toRow==0 && bestMove.toCol==0)
-        && bestScore > standPat) {
-        pv.push_back(bestMove);
-        pv.insert(pv.end(), bestLine.begin(), bestLine.end());
-    }
-    return bestScore;
-}
-
-// ─── Internal: Negamax core with PV (timed) ──────────────────────────────────
-// Returns score from the *current side-to-move's* perspective.
-// alpha/beta are also from current side’s perspective (negamax convention).
-static int negamaxTimed(BoardData& board, int depth, int alpha, int beta,
-                        std::chrono::steady_clock::time_point deadline,
-                        std::atomic<bool>& stop, std::vector<Move>& pv)
-{
-    if (stop.load() || std::chrono::steady_clock::now() > deadline) {
-        pv.clear();
-        return 0;
-    }
-    g_nodes.fetch_add(1, std::memory_order_relaxed);
-
-    // 50-move rule draw
-    if (board.halfmoveClock >= 100) {
-        pv.clear();
-        return 0;
-    }
-
-    if (depth == 0) {
-        // Switch to quiescence at the leaf
-        return quiescenceTimed(board, alpha, beta, /*qdepth=*/8, deadline, stop, pv);
-    }
-
-    auto moves = generateMoves(board);
-    if (moves.empty()) {
-        // No legal moves: you can add mate/stalemate detection here to return mate scores.
-        int s = stmSign(board) * evaluate(board);
-        pv.clear();
-        return s;
-    }
-
-    int bestScore = -INF;
-    Move bestMove{};
-    std::vector<Move> bestLine;
-
-    // (Optional) move ordering here: captures first, killers/history/TT
-
-    for (const auto& m : moves) {
-        BoardData child = applyMove(board, m);
-
-        std::vector<Move> childPV;
-        int score = -negamaxTimed(child, depth - 1, -beta, -alpha, deadline, stop, childPV);
-
-        if (score > bestScore) {
-            bestScore = score;
-            bestMove  = m;
-            bestLine  = std::move(childPV);
-        }
-
-        if (bestScore > alpha) alpha = bestScore;
-        if (alpha >= beta) {
-            // (Optional) record killer/history here
-            break;
-        }
-
-        if (stop.load() || std::chrono::steady_clock::now() > deadline) break;
-    }
-
-    // Build PV
-    pv.clear();
-    if (!(bestMove.fromRow==0 && bestMove.fromCol==0 && bestMove.toRow==0 && bestMove.toCol==0)) {
-        pv.push_back(bestMove);
-        pv.insert(pv.end(), bestLine.begin(), bestLine.end());
-    }
-    return bestScore;
-}
-
-// ─── Public wrapper: keep your old signature, ignore `maximizing` ────────────
-int alphabetaTimed(BoardData board, int depth, int alpha, int beta, bool /*maximizing_ignored*/,
-                   std::chrono::steady_clock::time_point deadline,
-                   std::atomic<bool>& stop, std::vector<Move>& pv)
-{
-    // In negamax we always search from the side-to-move’s perspective.
-    // The alpha/beta window is already assumed to be in that perspective.
-    return negamaxTimed(board, depth, alpha, beta, deadline, stop, pv);
-}
-
-int old_alphabetaTimed(BoardData board, int depth, int alpha, int beta, bool maximizing,
+int alphabetaTimed(BoardData board, int depth, int alpha, int beta, bool maximizing,
                    std::chrono::steady_clock::time_point deadline, std::atomic<bool>& stop, std::vector<Move>& pv) {
     // Alpha-Beta pruning is an optimization technique for the minimax algorithm.
     // It cuts off branches in the game tree which need not be searched because there already is a better move available.
@@ -1251,7 +1075,7 @@ int old_alphabetaTimed(BoardData board, int depth, int alpha, int beta, bool max
     if (depth == 0) 
         // If we are at maximum depth, perform a quiescence search to get a reaonable score and return it.
         // This is to avoid the horizon effect and ensure we evaluate only stable positions.
-        return old_quiescence(board, alpha, beta, maximizing, deadline, stop);
+        return quiescence(board, alpha, beta, maximizing, deadline, stop);
 
     auto moves = generateMoves(board); // Generate all possible moves (child nodes) for the current board state.
     if (moves.empty()) return evaluate(board);
@@ -1269,7 +1093,7 @@ int old_alphabetaTimed(BoardData board, int depth, int alpha, int beta, bool max
         for (const auto& m : moves) {
             BoardData newBoard = applyMove(board, m);
             std::vector<Move> childPV;
-            int eval = old_alphabetaTimed(newBoard, depth - 1, alpha, beta, false, deadline, stop, childPV);
+            int eval = alphabetaTimed(newBoard, depth - 1, alpha, beta, false, deadline, stop, childPV);
             if (eval > maxEval) {
                 // maxEval = std::max(maxEval, eval);
                 maxEval = eval; // Update the maximum evaluation found so far
@@ -1291,7 +1115,7 @@ int old_alphabetaTimed(BoardData board, int depth, int alpha, int beta, bool max
         for (auto& m : moves) {
             BoardData newBoard = applyMove(board, m);
             std::vector<Move> childPV;
-            int eval = old_alphabetaTimed(newBoard, depth - 1, alpha, beta, true, deadline, stop, childPV);
+            int eval = alphabetaTimed(newBoard, depth - 1, alpha, beta, true, deadline, stop, childPV);
             if (eval < minEval) {
                 // minEval = std::min(minEval, eval);
                 minEval = eval; // Update the minimum evaluation found so far
@@ -1308,34 +1132,75 @@ int old_alphabetaTimed(BoardData board, int depth, int alpha, int beta, bool max
     }
 }
 
-Move findBestMove(BoardData state, int depth, int timeLimitMs) {
-    auto moves = generateMoves(state);
-    if (moves.empty()) return Move{}; // no moves available
+// Find the best move using parallel search.
+// This function uses a parallel search to find the best move for the current board state.
+// It generates all possible moves, then uses a thread pool to evaluate each move in parallel.
+// It returns the best move found within the given time limit.
+// The depth parameter specifies how deep the search should go, and timeLimitMs specifies the maximum
+// time in milliseconds to spend searching for the best move.
+// If depth is 1, it simply evaluates the moves and returns the best one.
+Move findBestMoveParallel(BoardData board, int depth, int timeLimitMs) {
+    std::cout << "Started findBestMoveParallel depth: " << depth << std::endl;
+    auto moves = generateMoves(board);
+    if (moves.empty()) return {0, 0, 0, 0}; // No moves available
+    if (moves.size() == 1) return moves[0]; // Only one move available return it
+    if (depth < 1) depth = 1; // Ensure depth is at least 1
+    if (timeLimitMs < 100) timeLimitMs = 100; // Ensure time limit is at least 100ms
 
-    std::atomic<bool> stop(false);
+    if (depth == 1) {
+        // If depth is 1, just return the best move based on evaluation
+        int bestScore = -INF;
+        Move bestMove = moves[0];
+        for (const auto& m : moves) {
+            BoardData nextBoard = applyMove(board, m);
+            int score = evaluate(nextBoard);
+            if (score > bestScore) {
+                bestScore = score;
+                bestMove = m;
+            }
+        }
+        return bestMove;
+    }
+
+    // Create a thread pool with the number of threads equal to the number of available cores.
+    ThreadPool pool(std::thread::hardware_concurrency());
+    // Create vector to hold futures for the results of each task.
+    std::vector<std::future<int>> futures;
+
+    std::vector<Move> pvLine;
+
+    // Create atomic flag to stop the search if time limit is reached.
+    std::atomic<bool> localStop(false);
+    // Set the deadline for the search based on the time limit.
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeLimitMs);
+
+    // Enqueue tasks for each move and collect futures.
+    // This allows us to run the alphabeta search in parallel for each move.
+    for (const auto& m : moves) {
+        BoardData next = applyMove(board, m);
+        futures.emplace_back(pool.enqueue([=, &localStop, &pvLine]() {
+            return alphabetaTimed(next, depth - 1, -INF, INF, false, deadline, localStop, pvLine);
+        }));
+    }
 
     int bestScore = -INF;
     Move bestMove = moves[0];
-
-    for (const auto& m : moves) {
-        BoardData next = applyMove(state, m);
-        std::vector<Move> pv; // principal variation (optional)
-        int score = alphabetaTimed(
-            next,
-            depth - 1,
-            -INF,
-            INF,
-            !state.whiteToMove,
-            deadline,
-            stop,
-            pv
-        );
+    // Wait for each future to complete and determine the best move.
+    for (size_t i = 0; i < moves.size(); ++i) {
+        // If the time limit is reached, we stop processing further.
+        if (std::chrono::steady_clock::now() > deadline) {
+            localStop = true;
+            break;
+        }
+        // Get the result of the future.
+        // This will block until the task is complete.
+        // If the task was stopped due to time limit, it will return 0.
+        // Otherwise, it will return the evaluation score for the move.
+        int score = futures[i].get();
         if (score > bestScore) {
             bestScore = score;
-            bestMove = m;
+            bestMove = moves[i];
         }
     }
     return bestMove;
 }
-
